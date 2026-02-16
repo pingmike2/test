@@ -5,7 +5,6 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
