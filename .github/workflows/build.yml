@@ -6,37 +6,60 @@ on:
       - main
   workflow_dispatch: {}
 
+# ⭐ 关键：必须加写权限，否则会 403
 permissions:
-  contents: write   # 👈 关键
+  contents: write
 
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
-    env:
-      FILE_NAME: sbsh
+
     steps:
+      # 1️⃣ 检出代码
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2️⃣ 创建 dist 目录
       - name: Prepare dist directory
         run: mkdir -p dist
 
+      # 3️⃣ 构建多架构文件
       - name: Build sbsh for multiple architectures
         run: |
           ARCHS=("amd64" "arm64" "s390x")
           for arch in "${ARCHS[@]}"; do
             cp singbox-auto.sh "dist/sbsh-${arch}"
             chmod +x "dist/sbsh-${arch}"
+            echo "$arch build done"
           done
 
+          echo "Build result:"
+          ls -l dist
+
+      # 4️⃣ 创建 Release（每架构一个）
       - name: Upload sbsh to GitHub Release
         run: |
           ARCHS=("amd64" "arm64" "s390x")
+
           for arch in "${ARCHS[@]}"; do
-            RELEASE_TAG="sbsh-${arch}-$(date +'%Y%m%d%H%M%S')"
-            gh release create "$RELEASE_TAG" "dist/sbsh-${arch}" \
-              --title "sbsh $arch" \
+            RELEASE_TAG="$arch"
+
+            echo "Processing release: $RELEASE_TAG"
+
+            # 如果已存在同名 release，先删除（避免失败）
+            if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+              echo "Release $RELEASE_TAG exists, deleting..."
+              gh release delete "$RELEASE_TAG" -y
+              git push origin ":refs/tags/$RELEASE_TAG"
+            fi
+
+            # 创建 release
+            gh release create "$RELEASE_TAG" \
+              "dist/sbsh-${arch}#sbsh" \
+              --title "$arch" \
               --notes "Automatic release for $arch binary"
+
+            echo "$arch release done"
           done
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
