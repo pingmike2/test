@@ -1,4 +1,4 @@
-module 
+module sbsh
 
 go 1.21
 
