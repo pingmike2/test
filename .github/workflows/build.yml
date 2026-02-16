@@ -1,47 +1,34 @@
 name: Build and Release sbsh
 
 on:
-  push:
-    branches:
-      - main  # 或你默认的分支
-  workflow_dispatch: {}  # 允许手动触发
+  workflow_dispatch: {}  # 手动触发
 
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64, s390x]  # matrix 构建每个架构
     steps:
-      # 1️⃣ 检出代码
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2️⃣ 准备目录
       - name: Prepare dist directory
-        run: |
-          mkdir -p dist
+        run: mkdir -p dist
 
-      # 3️⃣ 构建 sbsh for each architecture
-      - name: Build sbsh for multiple architectures
+      - name: Build sbsh for ${{ matrix.arch }}
         run: |
-          ARCHS=("amd64" "arm64" "s390x")
-          for arch in "${ARCHS[@]}"; do
-            cp singbox-auto.sh "dist/sbsh"
-            chmod +x "dist/sbsh"
-            echo "$arch build done"
-          done
-          ls -l dist
+          cp singbox-auto.sh dist/sbsh
+          chmod +x dist/sbsh
+          echo "${{ matrix.arch }} build done"
 
-      # 4️⃣ 创建 Release 并上传每个架构
-      - name: Upload sbsh for each architecture
+      - name: Upload sbsh for ${{ matrix.arch }}
         uses: ncipollo/release-action@v1
         with:
-          artifacts: |
-            dist/sbsh
+          artifacts: dist/sbsh
+          tag: "sbsh-${{ matrix.arch }}-$(date +'%Y%m%d%H%M%S')"
+          name: "sbsh ${{ matrix.arch }}"
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          ARCHS=("amd64" "arm64" "s390x")
-          for arch in "${ARCHS[@]}"; do
-            echo "Creating release for $arch"
-            gh release create "sbsh-${arch}-$(date +'%Y%m%d%H%M%S')" dist/sbsh \
-              --title "sbsh $arch" --notes "Automatic release for $arch binary" || true
-          done
