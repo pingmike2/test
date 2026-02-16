@@ -6,45 +6,43 @@ on:
       - main
   workflow_dispatch: {}
 
-permissions:
-  contents: write   # 必须，允许创建 Release
-
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
-    env:
-      FILE_NAME: sbsh
     steps:
+      # 1️⃣ 检出代码
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2️⃣ 准备 dist 目录
       - name: Prepare dist directory
         run: mkdir -p dist
 
+      # 3️⃣ 构建 sbsh for each architecture
       - name: Build sbsh for multiple architectures
         run: |
           ARCHS=("amd64" "arm64" "s390x")
           for arch in "${ARCHS[@]}"; do
-            cp singbox-auto.sh "dist/sbsh-${arch}"  # 本地文件区分架构
+            cp singbox-auto.sh "dist/sbsh-${arch}"
             chmod +x "dist/sbsh-${arch}"
             echo "$arch build done"
           done
           ls -l dist
 
-      - name: Upload sbsh binaries as releases
-        uses: ncipollo/release-action@v1
-        with:
-          artifacts: |
-            dist/sbsh-amd64
-            dist/sbsh-arm64
-            dist/sbsh-s390x
-          tag: "auto-$(date +'%Y%m%d%H%M%S')"  # 随机 tag 避免冲突
-          name: "sbsh release $(date +'%Y%m%d%H%M%S')"
-          draft: false
-          prerelease: false
-          rename: |
-            dist/sbsh-amd64:sbsh
-            dist/sbsh-arm64:sbsh
-            dist/sbsh-s390x:sbsh
+      # 4️⃣ 上传 Release，每个架构的文件统一叫 sbsh
+      - name: Create Release and upload sbsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ARCHS=("amd64" "arm64" "s390x")
+          # 使用 run_number 生成合法 tag
+          TAG="v${GITHUB_RUN_NUMBER}"
+          # 创建 Release
+          gh release create "$TAG" --title "sbsh Release $TAG" --notes "Automatic release for sbsh binaries"
+          
+          # 上传每个架构，统一文件名为 sbsh
+          for arch in "${ARCHS[@]}"; do
+            cp "dist/sbsh-${arch}" dist/sbsh
+            gh release upload "$TAG" dist/sbsh --name sbsh --clobber
+            echo "$arch uploaded as sbsh"
+          done
