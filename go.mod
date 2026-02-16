@@ -1,4 +1,4 @@
-module sbsh
+module github.com/pingmike2/sbsh
 
 go 1.21
 
