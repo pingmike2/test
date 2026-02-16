@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write  # 允许创建 Release 并上传资产
+  contents: write   # 允许创建 Release 并上传资产
 
 jobs:
   build-and-release:
@@ -32,17 +32,20 @@ jobs:
     - name: Build binary
       run: |
         ARCH=${{ matrix.goarch }}
-        echo "Building for $ARCH..."
+        echo "Building sbsh for $ARCH..."
         export CGO_ENABLED=0
         export GOOS=linux
         export GOARCH=$ARCH
-        go build -ldflags="-s -w" -trimpath -o sbsh
+
+        # 编译
+        go build -ldflags="-s -w" -trimpath -o sbsh || exit 1
+
+        # 尝试压缩 UPX，失败不退出
         if [[ "$ARCH" == "amd64" || "$ARCH" == "arm64" ]]; then
-          echo "Compressing sbsh with UPX"
+          echo "Compressing sbsh with UPX..."
           upx --best --lzma sbsh || echo "UPX failed for $ARCH, skipping"
-        else
-          echo "Skipping UPX for $ARCH"
         fi
+
         ls -lh sbsh
 
     - name: Create or update Release
@@ -50,14 +53,22 @@ jobs:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         ARCH=${{ matrix.goarch }}
-        RELEASE_NAME="$ARCH"
-        echo "Creating or updating release $RELEASE_NAME..."
-        # 删除同名 Release 避免重复报错
-        if gh release view "$RELEASE_NAME" >/dev/null 2>&1; then
-          echo "Release exists, deleting..."
-          gh release delete "$RELEASE_NAME" -y
+        TAG="$ARCH"
+        echo "Creating or updating release for tag $TAG..."
+
+        # 删除旧 Release
+        if gh release view "$TAG" >/dev/null 2>&1; then
+          echo "Release $TAG exists, deleting..."
+          gh release delete "$TAG" -y
         fi
+
         # 创建新 Release 并上传 sbsh
-        gh release create "$RELEASE_NAME" sbsh \
-          --title "$RELEASE_NAME" \
-          --notes "Auto build for $RELEASE_NAME"
+        gh release create "$TAG" sbsh \
+          --title "$TAG" \
+          --notes "Auto build and release sbsh for $ARCH"
+
+    - name: List download URL
+      run: |
+        ARCH=${{ matrix.goarch }}
+        echo "Download sbsh for $ARCH at:"
+        echo "https://github.com/${{ github.repository }}/releases/download/$ARCH/sbsh"
