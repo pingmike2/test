@@ -1,1 +1,45 @@
-1
+name: Build and Release sbsh
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., v1.0.0)'
+        required: true
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    env:
+      FILE_NAME: sbsh
+    steps:
+      # 1️⃣ 检出代码
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2️⃣ 准备目录
+      - name: Prepare dist directory
+        run: |
+          mkdir -p dist
+
+      # 3️⃣ 构建 sbsh for each architecture
+      - name: Build sbsh for multiple architectures
+        run: |
+          ARCHS=("amd64" "arm64" "s390")
+          for arch in "${ARCHS[@]}"; do
+            cp singbox-auto.sh dist/sbsh
+            chmod +x dist/sbsh
+            echo "$arch build done"
+          done
+          ls -l dist
+
+      # 4️⃣ 创建 Releases 并上传
+      - name: Create GitHub Releases and upload sbsh
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: |
+            dist/sbsh
+          tag: ${{ github.event.inputs.version }}
+          name: ${{ github.event.inputs.version }}
+          draft: false
+          prerelease: false
