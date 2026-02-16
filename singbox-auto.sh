@@ -1,5 +1,3 @@
-#!/usr/bin/env bash
-
 if [ -f ".env" ]; then
   set -o allexport
   source <(grep -v '^#' .env | sed 's/^export //')
@@ -61,9 +59,9 @@ download_and_run() {
 
 ARCH=$(uname -m)
 if [[ "$ARCH" =~ arm|aarch64 ]]; then
-  BASE_URL="https://arm64.ssss.nyc.mn"
+  BASE_URL="https://github.com/eooce/test/releases/download/amd64"
 else
-  BASE_URL="https://amd64.ssss.nyc.mn"
+  BASE_URL="https://github.com/eooce/test/releases/download/amd64"
 fi
 
 FILES=("$BASE_URL/sb web" "$BASE_URL/bot bot")
