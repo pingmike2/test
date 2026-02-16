@@ -4,45 +4,39 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch: {}  # 允许手动触发
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # 👈 关键
 
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
     env:
       FILE_NAME: sbsh
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      # 1️⃣ 检出代码
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2️⃣ 准备目录
       - name: Prepare dist directory
         run: mkdir -p dist
 
-      # 3️⃣ 构建 sbsh for each architecture
       - name: Build sbsh for multiple architectures
         run: |
           ARCHS=("amd64" "arm64" "s390x")
           for arch in "${ARCHS[@]}"; do
             cp singbox-auto.sh "dist/sbsh-${arch}"
             chmod +x "dist/sbsh-${arch}"
-            echo "$arch build done"
           done
-          ls -l dist
 
-      # 4️⃣ 上传 Release，每个架构生成一个 Release，文件名字统一为 sbsh
       - name: Upload sbsh to GitHub Release
         run: |
           ARCHS=("amd64" "arm64" "s390x")
           for arch in "${ARCHS[@]}"; do
             RELEASE_TAG="sbsh-${arch}-$(date +'%Y%m%d%H%M%S')"
-            echo "Creating release $RELEASE_TAG with file sbsh"
             gh release create "$RELEASE_TAG" "dist/sbsh-${arch}" \
               --title "sbsh $arch" \
-              --notes "Automatic release for $arch binary" \
-              --repo $GITHUB_REPOSITORY
+              --notes "Automatic release for $arch binary"
           done
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
