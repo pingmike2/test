@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # 允许创建 Release 并上传资产
+  contents: write  # 允许创建 Release 并上传资产
 
 jobs:
   build-and-release:
@@ -31,24 +31,33 @@ jobs:
 
     - name: Build binary
       run: |
-        echo "Building for ${{ matrix.goarch }}"
+        ARCH=${{ matrix.goarch }}
+        echo "Building for $ARCH..."
         export CGO_ENABLED=0
         export GOOS=linux
-        export GOARCH=${{ matrix.goarch }}
+        export GOARCH=$ARCH
         go build -ldflags="-s -w" -trimpath -o sbsh
-        upx --best --lzma sbsh
+        if [[ "$ARCH" == "amd64" || "$ARCH" == "arm64" ]]; then
+          echo "Compressing sbsh with UPX"
+          upx --best --lzma sbsh || echo "UPX failed for $ARCH, skipping"
+        else
+          echo "Skipping UPX for $ARCH"
+        fi
         ls -lh sbsh
 
     - name: Create or update Release
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        RELEASE_NAME="${{ matrix.goarch }}"
+        ARCH=${{ matrix.goarch }}
+        RELEASE_NAME="$ARCH"
         echo "Creating or updating release $RELEASE_NAME..."
         # 删除同名 Release 避免重复报错
         if gh release view "$RELEASE_NAME" >/dev/null 2>&1; then
+          echo "Release exists, deleting..."
           gh release delete "$RELEASE_NAME" -y
         fi
+        # 创建新 Release 并上传 sbsh
         gh release create "$RELEASE_NAME" sbsh \
           --title "$RELEASE_NAME" \
           --notes "Auto build for $RELEASE_NAME"
