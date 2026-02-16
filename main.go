@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	_ "embed"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -10,7 +12,6 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
-	"context"
 	"time"
 )
 
@@ -74,13 +75,12 @@ func (p *ManagedProcess) Start() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.running {
-		return nil
+		return errors.New("process already running")
 	}
 	if err := p.cmd.Start(); err != nil {
 		return err
 	}
 	p.running = true
-
 	go func() {
 		err := p.cmd.Wait()
 		if err != nil {
@@ -91,7 +91,6 @@ func (p *ManagedProcess) Start() error {
 		p.running = false
 		p.mu.Unlock()
 	}()
-
 	return nil
 }
 
@@ -118,6 +117,8 @@ func (p *ManagedProcess) IsRunning() bool {
 // =====================
 
 func bootstrap(ctx context.Context) (*ManagedProcess, error) {
+	log.Println("bootstrap: preparing environment")
+
 	tmpDir := "./temp"
 	if err := os.MkdirAll(tmpDir, 0755); err != nil {
 		return nil, err
@@ -129,6 +130,7 @@ func bootstrap(ctx context.Context) (*ManagedProcess, error) {
 	}
 
 	process := NewManagedProcess(ctx, "bash", shPath)
+
 	if err := process.Start(); err != nil {
 		return nil, err
 	}
@@ -143,7 +145,6 @@ func bootstrap(ctx context.Context) (*ManagedProcess, error) {
 
 func supervisor(ctx context.Context) {
 	backoff := 5 * time.Second
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -161,13 +162,11 @@ func supervisor(ctx context.Context) {
 
 		for {
 			time.Sleep(3 * time.Second)
-
 			if !process.IsRunning() {
 				state.SetStarted(false)
 				process.Stop()
 				break
 			}
-
 			select {
 			case <-ctx.Done():
 				process.Stop()
@@ -175,7 +174,6 @@ func supervisor(ctx context.Context) {
 			default:
 			}
 		}
-
 		time.Sleep(backoff)
 	}
 }
@@ -186,7 +184,6 @@ func supervisor(ctx context.Context) {
 
 func startHTTPServer() *http.Server {
 	mux := http.NewServeMux()
-
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		started, err := state.Snapshot()
 		if err != nil {
@@ -200,25 +197,11 @@ func startHTTPServer() *http.Server {
 		w.Write([]byte("ok"))
 	})
 
-	mux.HandleFunc("/sub", func(w http.ResponseWriter, _ *http.Request) {
-		data, err := os.ReadFile("./temp/sub.txt")
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		w.Write(data)
-	})
-
 	server := &http.Server{
 		Addr:    ":3000",
 		Handler: mux,
 	}
-
-	go func() {
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Println("HTTP server error:", err)
-		}
-	}()
+	go server.ListenAndServe()
 	return server
 }
 
