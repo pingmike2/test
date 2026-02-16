@@ -2,83 +2,199 @@ package main
 
 import (
 	_ "embed"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"sync"
+	"syscall"
+	"context"
+	"time"
 )
 
 // =====================
 // 全局状态
 // =====================
 
-var started = false
-var lastError error
-
-func setStarted(v bool) {
-	started = v
+type AppState struct {
+	mu        sync.RWMutex
+	Started   bool
+	LastError error
 }
 
-func setError(err error) {
-	lastError = err
+func (s *AppState) SetStarted(v bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Started = v
 }
+
+func (s *AppState) SetError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.LastError = err
+}
+
+func (s *AppState) Snapshot() (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Started, s.LastError
+}
+
+var state = &AppState{}
 
 // =====================
-// 嵌入 start.sh（关键点）
+// 嵌入 start.sh
 // =====================
 
 //go:embed start.sh
 var startShContent []byte
 
 // =====================
-// 执行 start.sh
+// 进程封装
 // =====================
 
-func runStartSh() {
+type ManagedProcess struct {
+	cmd     *exec.Cmd
+	cancel  context.CancelFunc
+	running bool
+	mu      sync.Mutex
+}
+
+func NewManagedProcess(ctx context.Context, binary string, args ...string) *ManagedProcess {
+	cctx, cancel := context.WithCancel(ctx)
+	cmd := exec.CommandContext(cctx, binary, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return &ManagedProcess{cmd: cmd, cancel: cancel}
+}
+
+func (p *ManagedProcess) Start() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.running {
+		return nil
+	}
+	if err := p.cmd.Start(); err != nil {
+		return err
+	}
+	p.running = true
+
+	go func() {
+		err := p.cmd.Wait()
+		if err != nil {
+			log.Println("process exited:", err)
+			state.SetError(err)
+		}
+		p.mu.Lock()
+		p.running = false
+		p.mu.Unlock()
+	}()
+
+	return nil
+}
+
+func (p *ManagedProcess) Stop() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.running {
+		p.cancel()
+		if p.cmd.Process != nil {
+			_ = p.cmd.Process.Kill()
+		}
+		p.running = false
+	}
+}
+
+func (p *ManagedProcess) IsRunning() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.running
+}
+
+// =====================
+// Bootstrap
+// =====================
+
+func bootstrap(ctx context.Context) (*ManagedProcess, error) {
 	tmpDir := "./temp"
 	if err := os.MkdirAll(tmpDir, 0755); err != nil {
-		setError(err)
-		log.Println("mkdir failed:", err)
-		return
+		return nil, err
 	}
 
 	shPath := filepath.Join(tmpDir, "start.sh")
 	if err := os.WriteFile(shPath, startShContent, 0755); err != nil {
-		setError(err)
-		log.Println("write start.sh failed:", err)
-		return
+		return nil, err
 	}
 
-	cmd := exec.Command("bash", shPath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		setError(err)
-		log.Println("start.sh failed:", err)
-		return
+	process := NewManagedProcess(ctx, "bash", shPath)
+	if err := process.Start(); err != nil {
+		return nil, err
 	}
 
-	setStarted(true)
-	log.Println("start.sh executed successfully")
+	state.SetStarted(true)
+	return process, nil
+}
+
+// =====================
+// Supervisor
+// =====================
+
+func supervisor(ctx context.Context) {
+	backoff := 5 * time.Second
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		process, err := bootstrap(ctx)
+		if err != nil {
+			log.Println("bootstrap failed:", err)
+			state.SetError(err)
+			time.Sleep(backoff)
+			continue
+		}
+
+		for {
+			time.Sleep(3 * time.Second)
+
+			if !process.IsRunning() {
+				state.SetStarted(false)
+				process.Stop()
+				break
+			}
+
+			select {
+			case <-ctx.Done():
+				process.Stop()
+				return
+			default:
+			}
+		}
+
+		time.Sleep(backoff)
+	}
 }
 
 // =====================
 // HTTP Server
 // =====================
 
-func startHTTPServer() {
+func startHTTPServer() *http.Server {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-		if !started {
-			http.Error(w, "not started", 503)
+		started, err := state.Snapshot()
+		if err != nil {
+			http.Error(w, err.Error(), 500)
 			return
 		}
-		if lastError != nil {
-			http.Error(w, lastError.Error(), 500)
+		if !started {
+			http.Error(w, "not started", 503)
 			return
 		}
 		w.Write([]byte("ok"))
@@ -98,10 +214,12 @@ func startHTTPServer() {
 		Handler: mux,
 	}
 
-	log.Println("HTTP server listening on :3000")
-	if err := server.ListenAndServe(); err != nil {
-		log.Println("HTTP server stopped:", err)
-	}
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Println("HTTP server error:", err)
+		}
+	}()
+	return server
 }
 
 // =====================
@@ -109,8 +227,12 @@ func startHTTPServer() {
 // =====================
 
 func main() {
-	log.Println("Bootstrap MC platform mode")
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	runStartSh()
-	startHTTPServer()
+	go supervisor(ctx)
+	server := startHTTPServer()
+
+	<-ctx.Done()
+	_ = server.Shutdown(context.Background())
 }
