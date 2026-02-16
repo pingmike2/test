@@ -4,17 +4,20 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch: {}
+  workflow_dispatch: {}  # 允许手动触发
 
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
+    env:
+      FILE_NAME: sbsh
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       # 1️⃣ 检出代码
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2️⃣ 准备 dist 目录
+      # 2️⃣ 准备目录
       - name: Prepare dist directory
         run: mkdir -p dist
 
@@ -29,20 +32,17 @@ jobs:
           done
           ls -l dist
 
-      # 4️⃣ 上传 Release，每个架构的文件统一叫 sbsh
-      - name: Create Release and upload sbsh
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # 4️⃣ 上传 Release，每个架构生成一个 Release，文件名字统一为 sbsh
+      - name: Upload sbsh to GitHub Release
         run: |
           ARCHS=("amd64" "arm64" "s390x")
-          # 使用 run_number 生成合法 tag
-          TAG="v${GITHUB_RUN_NUMBER}"
-          # 创建 Release
-          gh release create "$TAG" --title "sbsh Release $TAG" --notes "Automatic release for sbsh binaries"
-          
-          # 上传每个架构，统一文件名为 sbsh
           for arch in "${ARCHS[@]}"; do
-            cp "dist/sbsh-${arch}" dist/sbsh
-            gh release upload "$TAG" dist/sbsh --name sbsh --clobber
-            echo "$arch uploaded as sbsh"
+            RELEASE_TAG="sbsh-${arch}-$(date +'%Y%m%d%H%M%S')"
+            echo "Creating release $RELEASE_TAG with file sbsh"
+            gh release create "$RELEASE_TAG" "dist/sbsh-${arch}" \
+              --title "sbsh $arch" \
+              --notes "Automatic release for $arch binary" \
+              --repo $GITHUB_REPOSITORY
           done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
