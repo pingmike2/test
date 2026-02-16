@@ -4,11 +4,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -39,7 +41,20 @@ type Config struct {
 }
 
 var cfg Config
+var sbxProcess *exec.Cmd
+var nezhaProcess *exec.Cmd
+var botProcess *exec.Cmd
+var webProcess *exec.Cmd
 
+var allEnvVars = []string{
+	"PORT", "FILE_PATH", "UUID", "NEZHA_SERVER", "NEZHA_PORT",
+	"NEZHA_KEY", "ARGO_PORT", "ARGO_DOMAIN", "ARGO_AUTH",
+	"S5_PORT", "HY2_PORT", "TUIC_PORT", "ANYTLS_PORT",
+	"REALITY_PORT", "ANYREALITY_PORT", "CFIP", "CFPORT",
+	"UPLOAD_URL", "CHAT_ID", "BOT_TOKEN", "NAME", "DISABLE_ARGO",
+}
+
+// -------------------- Init Config --------------------
 func initConfig() {
 	cfg = Config{
 		FilePath:    getEnv("FILE_PATH", "./world"),
@@ -50,11 +65,9 @@ func initConfig() {
 		ChatID:      os.Getenv("CHAT_ID"),
 		Name:        os.Getenv("NAME"),
 		DisableArgo: os.Getenv("DISABLE_ARGO") == "true",
-
 		NezhaServer: os.Getenv("NEZHA_SERVER"),
 		NezhaPort:   os.Getenv("NEZHA_PORT"),
 		NezhaKey:    os.Getenv("NEZHA_KEY"),
-
 		S5Port:      os.Getenv("S5_PORT"),
 		HY2Port:     os.Getenv("HY2_PORT"),
 		TUICPort:    os.Getenv("TUIC_PORT"),
@@ -71,17 +84,52 @@ func initConfig() {
 }
 
 func getEnv(key, def string) string {
-	v := os.Getenv(key)
-	if v == "" {
-		return def
+	if v := os.Getenv(key); v != "" {
+		return v
 	}
-	return v
+	return def
+}
+
+// -------------------- Download Binary --------------------
+func downloadBinary(url, dest string) error {
+	if _, err := os.Stat(dest); err == nil {
+		return nil
+	}
+	fmt.Println("Downloading:", url)
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	out, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, resp.Body)
+	if err != nil {
+		return err
+	}
+	return os.Chmod(dest, 0755)
+}
+
+func getArch() string {
+	arch := runtime.GOARCH
+	if arch == "amd64" {
+		return "amd64"
+	} else if arch == "arm64" {
+		return "arm64"
+	} else if arch == "s390x" {
+		return "s390x"
+	} else {
+		return "amd64"
+	}
 }
 
 // -------------------- Build Sing-box Config --------------------
 func buildSingBoxConfig() error {
 	configPath := filepath.Join(cfg.FilePath, "config.json")
-	configJSON := map[string]interface{}{
+	conf := map[string]interface{}{
 		"log": map[string]interface{}{
 			"disabled":  true,
 			"level":     "error",
@@ -97,15 +145,14 @@ func buildSingBoxConfig() error {
 					{"uuid": cfg.UUID},
 				},
 				"transport": map[string]string{
-					"type":                    "ws",
-					"path":                    "/vmess-argo",
-					"early_data_header_name":  "Sec-WebSocket-Protocol",
+					"type":                   "ws",
+					"path":                   "/vmess-argo",
+					"early_data_header_name": "Sec-WebSocket-Protocol",
 				},
 			},
 		},
 	}
-
-	data, err := json.MarshalIndent(configJSON, "", "  ")
+	data, err := json.MarshalIndent(conf, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -113,39 +160,51 @@ func buildSingBoxConfig() error {
 }
 
 // -------------------- Run Services --------------------
-func runCommand(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
+func runCmd(bin string, args ...string) (*exec.Cmd, error) {
+	cmd := exec.Command(bin, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Start()
+	return cmd, cmd.Start()
 }
 
 func runSingBoxAndArgo() {
+	arch := getArch()
+	sbxURL := fmt.Sprintf("https://github.com/eooce/test/releases/download/%s/sbx", arch)
+	botURL := fmt.Sprintf("https://github.com/eooce/test/releases/download/%s/bot", arch)
+	webURL := fmt.Sprintf("https://github.com/eooce/test/releases/download/%s/sbsh", arch)
+	
+	sbxBin := filepath.Join(cfg.FilePath, "sbx")
+	botBin := filepath.Join(cfg.FilePath, "bot")
+	webBin := filepath.Join(cfg.FilePath, "sbsh")
+
+	downloadBinary(sbxURL, sbxBin)
+	downloadBinary(botURL, botBin)
+	downloadBinary(webURL, webBin)
+
 	configFile := filepath.Join(cfg.FilePath, "config.json")
-	webBin := filepath.Join(cfg.FilePath, "sbsh-web")
-	if _, err := os.Stat(webBin); err == nil {
-		if err := runCommand(webBin, "run", "-c", configFile); err == nil {
-			fmt.Println("Sing-box web started")
+	webProcess, _ = runCmd(webBin, "run", "-c", configFile)
+	if !cfg.DisableArgo {
+		args := []string{"tunnel", "--edge-ip-version", "auto", "run", "--no-autoupdate"}
+		if cfg.ArgoPort != "" {
+			args = append(args, "--url", "http://localhost:"+cfg.ArgoPort)
 		}
+		botProcess, _ = runCmd(botBin, args...)
 	}
 
-	if !cfg.DisableArgo {
-		botBin := filepath.Join(cfg.FilePath, "sbsh-bot")
-		if _, err := os.Stat(botBin); err == nil {
-			args := []string{"tunnel", "--edge-ip-version", "auto", "run", "--no-autoupdate"}
-			if cfg.ArgoPort != "" {
-				args = append(args, "--url", "http://localhost:"+cfg.ArgoPort)
-			}
-			runCommand(botBin, args...)
-			fmt.Println("Argo bot started")
-		}
-	}
+	fmt.Println("Sing-box, bot, web started")
 }
 
 func runNezha() {
 	if cfg.NezhaServer != "" && cfg.NezhaKey != "" {
-		// TODO: 根据 v0 / v1 启动 agent
-		fmt.Println("Starting Nezha agent...")
+		arch := getArch()
+		agentURL := fmt.Sprintf("https://github.com/eooce/test/releases/download/%s/agent", arch)
+		agentBin := filepath.Join(cfg.FilePath, "agent")
+		downloadBinary(agentURL, agentBin)
+		nezhaProcess, _ = runCmd(agentBin,
+			"-s", cfg.NezhaServer,
+			"-p", cfg.NezhaPort,
+			"-k", cfg.NezhaKey)
+		fmt.Println("Nezha agent started")
 	}
 }
 
@@ -162,14 +221,9 @@ func generateSubscriptions() error {
 
 	vmess := fmt.Sprintf(`{"v":"2","ps":"%s","add":"%s","port":"%s","id":"%s","aid":"0","scy":"none","net":"ws","type":"none","host":"","path":"/vmess-argo?ed=2560","tls":"tls","sni":"","alpn":"","fp":"chrome"}`,
 		name, cfg.CFIP, cfg.CFPort, cfg.UUID)
-
 	content := []string{vmess}
-	// TODO: 根据 TUIC_PORT、HY2_PORT、REALITY_PORT 等生成其他协议
 
-	if err := ioutil.WriteFile(listFile, []byte(strings.Join(content, "\n")), 0644); err != nil {
-		return err
-	}
-
+	ioutil.WriteFile(listFile, []byte(strings.Join(content, "\n")), 0644)
 	subBase64 := base64.StdEncoding.EncodeToString([]byte(strings.Join(content, "\n")))
 	return ioutil.WriteFile(subFile, []byte(subBase64), 0644)
 }
@@ -179,14 +233,9 @@ func uploadNodes() {
 		return
 	}
 	listFile := filepath.Join(cfg.FilePath, "list.txt")
-	data, err := ioutil.ReadFile(listFile)
-	if err != nil {
-		return
-	}
+	data, _ := ioutil.ReadFile(listFile)
 	nodes := strings.Split(string(data), "\n")
-	jsonData := map[string][]string{"nodes": nodes}
-	body, _ := json.Marshal(jsonData)
-
+	body, _ := json.Marshal(map[string][]string{"nodes": nodes})
 	http.Post(cfg.UploadURL+"/api/add-nodes", "application/json", strings.NewReader(string(body)))
 }
 
@@ -195,23 +244,11 @@ func sendTelegram() {
 		return
 	}
 	listFile := filepath.Join(cfg.FilePath, "list.txt")
-	content, err := ioutil.ReadFile(listFile)
-	if err != nil {
-		return
-	}
-
+	content, _ := ioutil.ReadFile(listFile)
 	msg := fmt.Sprintf("<b>%s 节点推送通知</b>\n<pre>%s</pre>", cfg.Name, string(content))
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", cfg.BotToken)
 	http.Post(url, "application/json",
 		strings.NewReader(fmt.Sprintf(`{"chat_id":"%s","text":"%s","parse_mode":"HTML"}`, cfg.ChatID, msg)))
-}
-
-// -------------------- Cleanup --------------------
-func cleanup() {
-	files := []string{"config.json", "list.txt", "sub.txt"}
-	for _, f := range files {
-		os.Remove(filepath.Join(cfg.FilePath, f))
-	}
 }
 
 // -------------------- Utils --------------------
@@ -221,8 +258,15 @@ func getIP() string {
 		return "unknown"
 	}
 	defer resp.Body.Close()
-	b, _ := ioutil.ReadAll(resp.Body)
+	b, _ := io.ReadAll(resp.Body)
 	return string(b)
+}
+
+// -------------------- Cleanup --------------------
+func cleanup() {
+	for _, f := range []string{"config.json", "list.txt", "sub.txt"} {
+		os.Remove(filepath.Join(cfg.FilePath, f))
+	}
 }
 
 // -------------------- Main --------------------
@@ -245,7 +289,6 @@ func main() {
 	sendTelegram()
 
 	cleanup()
-
 	fmt.Println("All tasks finished!")
 	time.Sleep(2 * time.Second)
 }
