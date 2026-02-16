@@ -1,19 +1,22 @@
-name: Build
+name: Build and Release
 
 on:
   push:
     branches: [ "main" ]
   workflow_dispatch:
 
+permissions:
+  contents: write   # 允许创建 Release 并上传资产
+
 jobs:
-  build:
+  build-and-release:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         goarch: [amd64, arm64, s390x]
 
     steps:
-    - name: Checkout
+    - name: Checkout code
       uses: actions/checkout@v3
 
     - name: Set up Go
@@ -21,14 +24,31 @@ jobs:
       with:
         go-version: 1.22
 
-    - name: Build
+    - name: Install dependencies
       run: |
-        CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.goarch }} \
-        go build -ldflags="-s -w" -trimpath -o sbsh-${{ matrix.goarch }}
-        upx --best --lzma sbsh-${{ matrix.goarch }}
+        sudo apt-get update
+        sudo apt-get install -y upx-ucl gh
 
-    - name: Upload binaries
-      uses: actions/upload-artifact@v3
-      with:
-        name: sbsh-${{ matrix.goarch }}
-        path: sbsh-${{ matrix.goarch }}
+    - name: Build binary
+      run: |
+        echo "Building for ${{ matrix.goarch }}"
+        export CGO_ENABLED=0
+        export GOOS=linux
+        export GOARCH=${{ matrix.goarch }}
+        go build -ldflags="-s -w" -trimpath -o sbsh
+        upx --best --lzma sbsh
+        ls -lh sbsh
+
+    - name: Create or update Release
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        RELEASE_NAME="${{ matrix.goarch }}"
+        echo "Creating or updating release $RELEASE_NAME..."
+        # 删除同名 Release 避免重复报错
+        if gh release view "$RELEASE_NAME" >/dev/null 2>&1; then
+          gh release delete "$RELEASE_NAME" -y
+        fi
+        gh release create "$RELEASE_NAME" sbsh \
+          --title "$RELEASE_NAME" \
+          --notes "Auto build for $RELEASE_NAME"
