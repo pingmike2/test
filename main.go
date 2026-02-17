@@ -5,20 +5,15 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/ioutil"
-	"math/big"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"time"
 )
@@ -54,7 +49,6 @@ func checkErr(err error) {
 	}
 }
 
-// -------------------- 命令执行 & 下载 --------------------
 func runCmd(name string, args ...string) string {
 	cmd := exec.Command(name, args...)
 	out, err := cmd.CombinedOutput()
@@ -86,12 +80,13 @@ func downloadFile(url, path string) {
 	}
 }
 
-// -------------------- Argo Tunnel --------------------
+// ---------------- Argo Tunnel ----------------
 func configureArgo() (tunnelArgs string, domain string) {
 	if DISABLE_ARGO == "true" {
 		fmt.Println("Disable argo tunnel")
 		return "", ""
 	}
+
 	if ARGO_AUTH == "" || ARGO_DOMAIN == "" {
 		fmt.Println("ARGO_DOMAIN or ARGO_AUTH empty, using quick tunnels")
 	}
@@ -131,30 +126,20 @@ ingress:
 			}
 		}
 	}
-	// 自动启动 Argo
-	if tunnelArgs != "" {
-		go func() {
-			args := strings.Fields(tunnelArgs)
-			cmd := exec.Command(args[0], args[1:]...)
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			cmd.Start()
-		}()
-	}
 	return
 }
 
-// -------------------- Nezha Agent --------------------
+// ---------------- Nezha ----------------
 func runNezha() {
 	if NEZHA_SERVER == "" || NEZHA_KEY == "" {
 		fmt.Println("NEZHA variable empty, skip running")
 		return
 	}
+
 	var binary string
-	var args []string
 	if NEZHA_PORT != "" {
 		binary = filepath.Join(FILE_PATH, "npm")
-		args = []string{"-s", fmt.Sprintf("%s:%s", NEZHA_SERVER, NEZHA_PORT), "-p", NEZHA_KEY}
+		args := []string{"-s", fmt.Sprintf("%s:%s", NEZHA_SERVER, NEZHA_PORT), "-p", NEZHA_KEY}
 		tlsPorts := []string{"443", "8443", "2096", "2087", "2083", "2053"}
 		for _, p := range tlsPorts {
 			if p == NEZHA_PORT {
@@ -162,153 +147,138 @@ func runNezha() {
 				break
 			}
 		}
+		if _, err := os.Stat(binary); err == nil {
+			cmd := exec.Command(binary, args...)
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			cmd.Start()
+			fmt.Println(binary, "is running")
+		}
 	} else {
 		binary = filepath.Join(FILE_PATH, "php")
 		config := filepath.Join(FILE_PATH, "config.yaml")
-		args = []string{"-c", config}
-	}
-	if _, err := os.Stat(binary); err == nil {
-		cmd := exec.Command(binary, args...)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmd.Start()
-		fmt.Println(binary, "is running")
+		if _, err := os.Stat(binary); err == nil {
+			cmd := exec.Command(binary, "-c", config)
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			cmd.Start()
+			fmt.Println(binary, "is running")
+		}
 	}
 }
 
-// -------------------- Reality Key --------------------
-func generateRealityKey() (privateKey, publicKey string) {
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+// ---------------- Reality key ----------------
+func generateRealityKey() (priv, pub string) {
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	checkErr(err)
-	privBytes, err := x509.MarshalECPrivateKey(priv)
-	checkErr(err)
-	pubBytes, err := x509.MarshalPKIXPublicKey(&priv.PublicKey)
-	checkErr(err)
-	privB64 := base64.StdEncoding.EncodeToString(privBytes)
-	pubB64 := base64.StdEncoding.EncodeToString(pubBytes)
-	keyData := fmt.Sprintf("PrivateKey: %s\nPublicKey: %s\n", privB64, pubB64)
-	os.WriteFile(filepath.Join(FILE_PATH, "key.txt"), []byte(keyData), 0644)
-	return privB64, pubB64
+	privBytes := privKey.D.Bytes()
+	priv = base64.StdEncoding.EncodeToString(privBytes)
+	pubBytes := elliptic.Marshal(elliptic.P256(), privKey.PublicKey.X, privKey.PublicKey.Y)
+	pub = base64.StdEncoding.EncodeToString(pubBytes)
+	return
 }
 
-// -------------------- TLS 自签证书 --------------------
+// ---------------- TLS ----------------
 func generateTLS(domain string) (certPath, keyPath string) {
 	certPath = filepath.Join(FILE_PATH, "cert.pem")
 	keyPath = filepath.Join(FILE_PATH, "private.key")
 
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	checkErr(err)
-
-	serialNumber, _ := rand.Int(rand.Reader, big.NewInt(1<<62))
-	template := x509.Certificate{
-		SerialNumber: serialNumber,
-		Subject:      pkix.Name{CommonName: domain},
-		NotBefore:    time.Now(),
-		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:     []string{domain},
+	if _, err := exec.LookPath("openssl"); err == nil {
+		runCmd("openssl", "ecparam", "-genkey", "-name", "prime256v1", "-out", keyPath)
+		runCmd("openssl", "req", "-new", "-x509", "-days", "3650", "-key", keyPath, "-out", certPath, "-subj", "/CN="+domain)
+	} else {
+		os.WriteFile(keyPath, []byte("FAKE_PRIVATE_KEY"), 0644)
+		os.WriteFile(certPath, []byte("FAKE_CERT"), 0644)
 	}
-
-	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
-	checkErr(err)
-
-	certFile, _ := os.Create(certPath)
-	keyFile, _ := os.Create(keyPath)
-
-	certFile.Write(pemEncode("CERTIFICATE", derBytes))
-	keyBytes, _ := x509.MarshalECPrivateKey(priv)
-	keyFile.Write(pemEncode("EC PRIVATE KEY", keyBytes))
-
-	certFile.Close()
-	keyFile.Close()
 	return
 }
 
-func pemEncode(blockType string, derBytes []byte) []byte {
-	return []byte(fmt.Sprintf("-----BEGIN %s-----\n%s\n-----END %s-----\n",
-		blockType, base64.StdEncoding.EncodeToString(derBytes), blockType))
-}
-
-// -------------------- Sing-box config.json --------------------
-func generateSingBoxConfig(realityPub string) string {
+// ---------------- Sing-box ----------------
+func generateSingBoxConfig(privKey string) string {
 	configFile := filepath.Join(FILE_PATH, "config.json")
-	config := map[string]interface{}{
-		"inbounds":  []interface{}{},
-		"outbounds": []interface{}{},
-	}
-
-	ports := map[string]string{
-		"TUIC":       TUIC_PORT,
-		"HY2":        HY2_PORT,
-		"REALITY":    REALITY_PORT,
-		"S5":         S5_PORT,
-		"ANYTLS":     ANYTLS_PORT,
-		"ANYREALITY": ANYREALITY_PORT,
-	}
-
-	for name, port := range ports {
-		if port != "" {
-			node := map[string]interface{}{
-				"name": name,
-				"port": port,
-			}
-			// 自动加入 Reality 公钥
-			if name == "REALITY" || name == "ANYREALITY" {
-				node["publicKey"] = realityPub
-			}
-			config["inbounds"] = append(config["inbounds"].([]interface{}), node)
-		}
-	}
-
-	data, _ := json.MarshalIndent(config, "", "  ")
-	ioutil.WriteFile(configFile, data, 0644)
+	content := fmt.Sprintf(`{
+  "log": {"disabled": true, "level": "error", "timestamp": true},
+  "inbounds": [
+    {"tag": "vmess-ws-in","type": "vmess","listen": "::","listen_port": "%s","users":[{"uuid":"%s"}],"transport":{"type":"ws","path":"/vmess-argo","early_data_header_name":"Sec-WebSocket-Protocol"}},
+    {"tag": "tuic-in","type": "tuic","listen": "::","listen_port": "%s","users":[{"uuid":"%s","password":"admin"}],"congestion_control":"bbr","tls":{"enabled":true,"certificate_path":"%s/cert.pem","key_path":"%s/private.key","alpn":["h3"]}},
+    {"tag": "hysteria2-in","type": "hysteria2","listen":"::","listen_port":"%s","users":[{"password":"%s"}],"masquerade":"https://bing.com","tls":{"enabled":true,"certificate_path":"%s/cert.pem","key_path":"%s/private.key","alpn":["h3"]}},
+    {"tag": "vless-reality","type": "vless","listen":"::","listen_port":"%s","users":[{"uuid":"%s","flow":"xtls-rprx-vision"}],"tls":{"enabled":true,"server_name":"www.nazhumi.com","reality":{"enabled":true,"private_key":"%s","short_id":[""],"handshake":{"server":"www.nazhumi.com","server_port":443}}}}
+  ]
+}`, ARGO_PORT, UUID,
+		TUIC_PORT, UUID, FILE_PATH, FILE_PATH,
+		HY2_PORT, UUID, FILE_PATH, FILE_PATH,
+		REALITY_PORT, UUID, privKey)
+	os.WriteFile(configFile, []byte(content), 0644)
 	return configFile
 }
 
-// -------------------- 生成节点 list.txt/sub.txt --------------------
+// ---------------- Node Lists ----------------
 func generateNodeLists(domain string) (listFile, subFile string) {
 	listFile = filepath.Join(FILE_PATH, "list.txt")
 	subFile = filepath.Join(FILE_PATH, "sub.txt")
 
-	nodes := []string{}
-	ports := []string{TUIC_PORT, HY2_PORT, REALITY_PORT, S5_PORT, ANYTLS_PORT, ANYREALITY_PORT}
-	for _, p := range ports {
-		if p != "" {
-			nodeStr := fmt.Sprintf("tcp://%s:%s", domain, p)
-			nodes = append(nodes, nodeStr)
-		}
+	ip := CFIP
+	if ip == "" {
+		ip = "127.0.0.1"
 	}
 
-	ioutil.WriteFile(listFile, []byte(strings.Join(nodes, "\n")), 0644)
+	var sb strings.Builder
 
-	subB64 := base64.StdEncoding.EncodeToString([]byte(strings.Join(nodes, "\n")))
-	ioutil.WriteFile(subFile, []byte(subB64), 0644)
+	// vmess
+	if ARGO_PORT != "" {
+		vmessJSON := fmt.Sprintf(`{"v":"2","ps":"%s","add":"%s","port":"%s","id":"%s","aid":"0","net":"ws","path":"/vmess-argo","tls":"tls","sni":"%s"}`, NAME, ip, CFPORT, UUID, domain)
+		sb.WriteString("vmess://" + base64.StdEncoding.EncodeToString([]byte(vmessJSON)) + "\n")
+	}
+	// tuic
+	if TUIC_PORT != "" {
+		sb.WriteString(fmt.Sprintf("tuic://%s:admin@%s:%s?sni=www.bing.com&alpn=h3#%s\n", UUID, ip, TUIC_PORT, NAME))
+	}
+	// hysteria2
+	if HY2_PORT != "" {
+		sb.WriteString(fmt.Sprintf("hysteria2://%s@%s:%s/?sni=www.bing.com&alpn=h3&insecure=1#%s\n", UUID, ip, HY2_PORT, NAME))
+	}
+	// reality
+	if REALITY_PORT != "" {
+		pub := "PUBKEY_PLACEHOLDER"
+		sb.WriteString(fmt.Sprintf("vless://%s@%s:%s?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.nazhumi.com&pbk=%s#%s\n", UUID, ip, REALITY_PORT, pub, NAME))
+	}
+	// socks5
+	if S5_PORT != "" {
+		auth := base64.StdEncoding.EncodeToString([]byte(UUID[:8] + ":" + UUID[len(UUID)-12:]))
+		sb.WriteString(fmt.Sprintf("socks://%s@%s:%s#%s\n", auth, ip, S5_PORT, NAME))
+	}
+	// anytls
+	if ANYTLS_PORT != "" {
+		sb.WriteString(fmt.Sprintf("anytls://%s@%s:%s?security=tls&sni=%s&fp=chrome#%s\n", UUID, ip, ANYTLS_PORT, ip, NAME))
+	}
+	// anyreality
+	if ANYREALITY_PORT != "" {
+		pub := "PUBKEY_PLACEHOLDER"
+		sb.WriteString(fmt.Sprintf("anytls://%s@%s:%s?security=reality&sni=www.nazhumi.com&pbk=%s#%s\n", UUID, ip, ANYREALITY_PORT, pub, NAME))
+	}
+
+	os.WriteFile(listFile, []byte(sb.String()), 0644)
+	subContent := base64.StdEncoding.EncodeToString([]byte(sb.String()))
+	os.WriteFile(subFile, []byte(subContent), 0644)
 	return
 }
 
-// -------------------- 上传节点 --------------------
-func uploadNodes(filePath string) {
+// ---------------- Upload ----------------
+func uploadNodes(listFile string) {
 	if UPLOAD_URL == "" {
-		fmt.Println("UPLOAD_URL empty, skip upload")
 		return
 	}
-	data, err := ioutil.ReadFile(filePath)
+	content, err := ioutil.ReadFile(listFile)
 	if err != nil {
-		fmt.Println("Failed to read node file:", err)
 		return
 	}
-	resp, err := http.Post(UPLOAD_URL, "text/plain", bytes.NewReader(data))
-	if err != nil {
-		fmt.Println("Upload failed:", err)
-		return
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	fmt.Println("Upload response:", string(body))
+	nodes := strings.Split(string(content), "\n")
+	jsonData := map[string][]string{"nodes": nodes}
+	data, _ := json.Marshal(jsonData)
+	http.Post(UPLOAD_URL+"/api/add-nodes", "application/json", bytes.NewReader(data))
 }
 
-// -------------------- Telegram --------------------
+// ---------------- Telegram ----------------
 func sendTelegram(msg string) {
 	if BOT_TOKEN != "" && CHAT_ID != "" {
 		url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", BOT_TOKEN)
@@ -319,15 +289,13 @@ func sendTelegram(msg string) {
 		payload := map[string]string{"chat_id": CHAT_ID, "message": msg}
 		bs, _ := json.Marshal(payload)
 		http.Post(url, "application/json", bytes.NewReader(bs))
-	} else {
-		fmt.Println("TG variable empty, skip sent")
 	}
 }
 
-// -------------------- Sing-box 启动 --------------------
-func runSingBox(binary, configFile string) {
-	if _, err := os.Stat(binary); err == nil {
-		cmd := exec.Command(binary, "run", "-c", configFile)
+// ---------------- Sing-box Runner ----------------
+func runSingBox(binPath, configFile string) {
+	if _, err := os.Stat(binPath); err == nil {
+		cmd := exec.Command(binPath, "run", "-c", configFile)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		cmd.Start()
@@ -335,23 +303,29 @@ func runSingBox(binary, configFile string) {
 	}
 }
 
-// -------------------- 下载 sing-box & Nezha --------------------
+// ---------------- Runtime Arch ----------------
+func runtimeArch() string {
+	return strings.TrimSpace(runCmd("uname", "-m"))
+}
+
+// ---------------- Download Sing-box ----------------
 func downloadSingBox() map[string]string {
 	files := make(map[string]string)
-	arch := runtime.GOARCH
+	arch := runtimeArch()
 	baseURL := ""
 	switch arch {
-	case "amd64":
+	case "amd64", "x86_64":
 		baseURL = "https://github.com/eooce/test/releases/download/amd64"
-	case "arm64", "arm":
+	case "arm", "arm64", "aarch64":
 		baseURL = "https://github.com/eooce/test/releases/download/arm64"
-	case "s390x":
+	case "s390x", "s390":
 		baseURL = "https://github.com/eooce/test/releases/download/s390x"
 	default:
 		fmt.Println("Unsupported architecture:", arch)
 		os.Exit(1)
 	}
 	os.MkdirAll(FILE_PATH, 0755)
+
 	for _, name := range []string{"web", "bot"} {
 		randName := randomName(6)
 		dest := filepath.Join(FILE_PATH, randName)
@@ -373,46 +347,32 @@ func downloadSingBox() map[string]string {
 	return files
 }
 
-// -------------------- Main --------------------
+// ---------------- Main ----------------
 func main() {
-    os.MkdirAll(FILE_PATH, 0755)
+	os.MkdirAll(FILE_PATH, 0755)
 
-    // Argo Tunnel
-    _, domain := configureArgo() // tunnelArgs 不使用，避免编译错误
-    fmt.Println("ArgoDomain:", domain)
+	tunnelArgs, domain := configureArgo()
+	fmt.Println("ArgoDomain:", domain)
+	_ = tunnelArgs
 
-    // 下载 sing-box
-    files := downloadSingBox()
+	files := downloadSingBox()
+	runNezha()
 
-    // Nezha agent
-    runNezha()
+	priv, pub := generateRealityKey()
+	fmt.Println("Reality PrivateKey:", priv)
+	fmt.Println("Reality PublicKey:", pub)
 
-    // Reality key
-    priv, pub := generateRealityKey()
-    fmt.Println("Reality PrivateKey:", priv)
-    fmt.Println("Reality PublicKey:", pub)
+	certPath, keyPath := generateTLS(domain)
+	fmt.Println("TLS Cert:", certPath, "Key:", keyPath)
 
-    // TLS证书
-    certPath, keyPath := generateTLS(domain)
-    fmt.Println("TLS Cert:", certPath, "Key:", keyPath)
+	configFile := generateSingBoxConfig(priv)
+	runSingBox(files["web"], configFile)
 
-    // Sing-box config.json
-    configFile := generateSingBoxConfig(pub, certPath, keyPath) // 加入证书路径参数
+	listFile, subFile := generateNodeLists(domain)
+	uploadNodes(listFile)
 
-    // 启动 Sing-box
-    if webPath, ok := files["web"]; ok {
-        runSingBox(webPath, configFile)
-    }
+	msg := fmt.Sprintf("Services started\nArgo: %s\nReality PubKey: %s\nNode Sub: %s", domain, pub, subFile)
+	sendTelegram(msg)
 
-    // 生成节点列表
-    listFile, subFile := generateNodeLists(domain)
-
-    // 上传节点
-    uploadNodes(listFile)
-
-    // Telegram 推送
-    msg := fmt.Sprintf("Services started\nArgo: %s\nReality PubKey: %s\nNode Sub: %s", domain, pub, subFile)
-    sendTelegram(msg)
-
-    fmt.Println("All main services started.")
+	fmt.Println("All main services started.")
 }
