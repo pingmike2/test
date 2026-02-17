@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -73,7 +74,7 @@ func NewManagedProcess(ctx context.Context, binary string, args ...string) *Mana
 	return &ManagedProcess{
 		cmd:     cmd,
 		cancel:  cancel,
-		oneshot: true,
+		oneshot: true, // start.sh 只跑一次
 	}
 }
 
@@ -135,10 +136,29 @@ func (p *ManagedProcess) IsRunning() bool {
 // Bootstrap
 // =====================
 
+func getenvWithDefault(key, def string) string {
+	if val := os.Getenv(key); val != "" {
+		return val
+	}
+	return def
+}
+
+func getenvBool(key string, def bool) bool {
+	val := getenvWithDefault(key, "")
+	if val == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(val)
+	if err != nil {
+		return def
+	}
+	return b
+}
+
 func bootstrap(ctx context.Context) (*ManagedProcess, error) {
 	log.Println("bootstrap: preparing environment")
 
-	tmpDir := "./world"
+	tmpDir := getenvWithDefault("FILE_PATH", "./world")
 	if err := os.MkdirAll(tmpDir, 0755); err != nil {
 		return nil, err
 	}
@@ -153,33 +173,30 @@ func bootstrap(ctx context.Context) (*ManagedProcess, error) {
 	// =====================
 
 	vars := map[string]string{
-		"UUID":           "fe7431cb-ab1b-4205-a14c-d056f821b383",
-		"FILE_PATH":      tmpDir,
-		"NEZHA_SERVER":   os.Getenv("NEZHA_SERVER"),
-		"NEZHA_PORT":     os.Getenv("NEZHA_PORT"),
-		"NEZHA_KEY":      os.Getenv("NEZHA_KEY"),
-		"ARGO_PORT":      os.Getenv("ARGO_PORT"),
-		"ARGO_DOMAIN":    os.Getenv("ARGO_DOMAIN"),
-		"ARGO_AUTH":      os.Getenv("ARGO_AUTH"),
-		"S5_PORT":        os.Getenv("S5_PORT"),
-		"HY2_PORT":       os.Getenv("HY2_PORT"),
-		"TUIC_PORT":      os.Getenv("TUIC_PORT"),
-		"ANYTLS_PORT":    os.Getenv("ANYTLS_PORT"),
-		"REALITY_PORT":   os.Getenv("REALITY_PORT"),
-		"ANYREALITY_PORT":os.Getenv("ANYREALITY_PORT"),
-		"CFIP":           os.Getenv("CFIP"),
-		"CFPORT":         os.Getenv("CFPORT"),
-		"UPLOAD_URL":     os.Getenv("UPLOAD_URL"),
-		"CHAT_ID":        os.Getenv("CHAT_ID"),
-		"BOT_TOKEN":      os.Getenv("BOT_TOKEN"),
-		"NAME":           os.Getenv("NAME"),
-		"DISABLE_ARGO":   os.Getenv("DISABLE_ARGO"),
+		"UUID":            getenvWithDefault("UUID", "fe7431cb-ab1b-4205-a14c-d056f821b383"),
+		"FILE_PATH":       tmpDir,
+		"NEZHA_SERVER":    getenvWithDefault("NEZHA_SERVER", ""),
+		"NEZHA_PORT":      getenvWithDefault("NEZHA_PORT", ""),
+		"NEZHA_KEY":       getenvWithDefault("NEZHA_KEY", ""),
+		"ARGO_PORT":       getenvWithDefault("ARGO_PORT", ""),
+		"ARGO_DOMAIN":     getenvWithDefault("ARGO_DOMAIN", ""),
+		"ARGO_AUTH":       getenvWithDefault("ARGO_AUTH", ""),
+		"S5_PORT":         getenvWithDefault("S5_PORT", ""),
+		"HY2_PORT":        getenvWithDefault("HY2_PORT", ""),
+		"TUIC_PORT":       getenvWithDefault("TUIC_PORT", ""),
+		"ANYTLS_PORT":     getenvWithDefault("ANYTLS_PORT", ""),
+		"REALITY_PORT":    getenvWithDefault("REALITY_PORT", ""),
+		"ANYREALITY_PORT": getenvWithDefault("ANYREALITY_PORT", ""),
+		"CFIP":            getenvWithDefault("CFIP", "spring.io"),
+		"CFPORT":          getenvWithDefault("CFPORT", "443"),
+		"UPLOAD_URL":      getenvWithDefault("UPLOAD_URL", ""),
+		"CHAT_ID":         getenvWithDefault("CHAT_ID", ""),
+		"BOT_TOKEN":       getenvWithDefault("BOT_TOKEN", ""),
+		"NAME":            getenvWithDefault("NAME", ""),
+		"DISABLE_ARGO":    getenvWithDefault("DISABLE_ARGO", "false"),
 	}
 
 	for k, v := range vars {
-		if v == "" {
-			v = ""
-		}
 		os.Setenv(k, v)
 	}
 
