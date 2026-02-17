@@ -375,42 +375,44 @@ func downloadSingBox() map[string]string {
 
 // -------------------- Main --------------------
 func main() {
-	os.MkdirAll(FILE_PATH, 0755)
+    os.MkdirAll(FILE_PATH, 0755)
 
-	// Argo Tunnel
-	tunnelArgs, domain := configureArgo()
-	fmt.Println("ArgoDomain:", domain)
+    // Argo Tunnel
+    _, domain := configureArgo() // tunnelArgs 不使用，避免编译错误
+    fmt.Println("ArgoDomain:", domain)
 
-	// 下载 sing-box
-	files := downloadSingBox()
+    // 下载 sing-box
+    files := downloadSingBox()
 
-	// Nezha agent
-	runNezha()
+    // Nezha agent
+    runNezha()
 
-	// Reality key
-	priv, pub := generateRealityKey()
-	fmt.Println("Reality PrivateKey:", priv)
-	fmt.Println("Reality PublicKey:", pub)
+    // Reality key
+    priv, pub := generateRealityKey()
+    fmt.Println("Reality PrivateKey:", priv)
+    fmt.Println("Reality PublicKey:", pub)
 
-	// TLS证书
-	cert, key := generateTLS(domain)
-	fmt.Println("TLS Cert:", cert, "Key:", key)
+    // TLS证书
+    certPath, keyPath := generateTLS(domain)
+    fmt.Println("TLS Cert:", certPath, "Key:", keyPath)
 
-	// Sing-box config.json
-	configFile := generateSingBoxConfig(pub)
+    // Sing-box config.json
+    configFile := generateSingBoxConfig(pub, certPath, keyPath) // 加入证书路径参数
 
-	// 启动 Sing-box
-	runSingBox(files["web"], configFile)
+    // 启动 Sing-box
+    if webPath, ok := files["web"]; ok {
+        runSingBox(webPath, configFile)
+    }
 
-	// 生成节点列表
-	listFile, subFile := generateNodeLists(domain)
+    // 生成节点列表
+    listFile, subFile := generateNodeLists(domain)
 
-	// 上传节点
-	uploadNodes(listFile)
+    // 上传节点
+    uploadNodes(listFile)
 
-	// Telegram 推送
-	msg := fmt.Sprintf("Services started\nArgo: %s\nReality PubKey: %s\nNode Sub: %s", domain, pub, subFile)
-	sendTelegram(msg)
+    // Telegram 推送
+    msg := fmt.Sprintf("Services started\nArgo: %s\nReality PubKey: %s\nNode Sub: %s", domain, pub, subFile)
+    sendTelegram(msg)
 
-	fmt.Println("All main services started.")
+    fmt.Println("All main services started.")
 }
