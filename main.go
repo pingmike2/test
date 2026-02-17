@@ -60,43 +60,65 @@ type ManagedProcess struct {
 	cmd     *exec.Cmd
 	cancel  context.CancelFunc
 	running bool
+	oneshot bool // 👈 关键：一次性任务
 	mu      sync.Mutex
 }
 
 func NewManagedProcess(ctx context.Context, binary string, args ...string) *ManagedProcess {
 	cctx, cancel := context.WithCancel(ctx)
+
 	cmd := exec.CommandContext(cctx, binary, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return &ManagedProcess{cmd: cmd, cancel: cancel}
+
+	return &ManagedProcess{
+		cmd:     cmd,
+		cancel:  cancel,
+		oneshot: true, // start.sh 本质是一次性
+	}
 }
 
 func (p *ManagedProcess) Start() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
 	if p.running {
 		return errors.New("process already running")
 	}
+
 	if err := p.cmd.Start(); err != nil {
 		return err
 	}
+
 	p.running = true
+
 	go func() {
 		err := p.cmd.Wait()
+
+		p.mu.Lock()
+		defer p.mu.Unlock()
+
+		p.running = false
+
+		// ✅ oneshot：正常退出 ≠ 错误
+		if p.oneshot {
+			log.Println("start.sh finished normally (oneshot)")
+			return
+		}
+
 		if err != nil {
-			log.Println("process exited:", err)
+			log.Println("process exited with error:", err)
 			state.SetError(err)
 		}
-		p.mu.Lock()
-		p.running = false
-		p.mu.Unlock()
 	}()
+
 	return nil
 }
 
 func (p *ManagedProcess) Stop() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
 	if p.running {
 		p.cancel()
 		if p.cmd.Process != nil {
@@ -140,41 +162,32 @@ func bootstrap(ctx context.Context) (*ManagedProcess, error) {
 }
 
 // =====================
-// Supervisor
+// Supervisor（只跑一次）
 // =====================
 
 func supervisor(ctx context.Context) {
-	backoff := 5 * time.Second
+	process, err := bootstrap(ctx)
+	if err != nil {
+		log.Println("bootstrap failed:", err)
+		state.SetError(err)
+		return
+	}
+
+	// 等待 start.sh 执行完成
 	for {
+		time.Sleep(1 * time.Second)
+
+		if !process.IsRunning() {
+			log.Println("bootstrap completed, supervisor exiting")
+			return
+		}
+
 		select {
 		case <-ctx.Done():
+			process.Stop()
 			return
 		default:
 		}
-
-		process, err := bootstrap(ctx)
-		if err != nil {
-			log.Println("bootstrap failed:", err)
-			state.SetError(err)
-			time.Sleep(backoff)
-			continue
-		}
-
-		for {
-			time.Sleep(3 * time.Second)
-			if !process.IsRunning() {
-				state.SetStarted(false)
-				process.Stop()
-				break
-			}
-			select {
-			case <-ctx.Done():
-				process.Stop()
-				return
-			default:
-			}
-		}
-		time.Sleep(backoff)
 	}
 }
 
@@ -184,6 +197,7 @@ func supervisor(ctx context.Context) {
 
 func startHTTPServer() *http.Server {
 	mux := http.NewServeMux()
+
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		started, err := state.Snapshot()
 		if err != nil {
@@ -201,12 +215,18 @@ func startHTTPServer() *http.Server {
 		Addr:    ":3000",
 		Handler: mux,
 	}
-	go server.ListenAndServe()
+
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Println("http server error:", err)
+		}
+	}()
+
 	return server
 }
 
 // =====================
-// Main
+// Main（关键：不退出）
 // =====================
 
 func main() {
@@ -214,8 +234,10 @@ func main() {
 	defer stop()
 
 	go supervisor(ctx)
-	server := startHTTPServer()
+	_ = startHTTPServer()
 
-	<-ctx.Done()
-	_ = server.Shutdown(context.Background())
+	log.Println("sbsh started, entering keep-alive mode")
+
+	// 👇 核心：MC / 面板只认这个进程在不在
+	select {}
 }
