@@ -1,293 +1,66 @@
 package main
 
 import (
-	"context"
-	_ "embed"
-	"errors"
 	"fmt"
-	"log"
-	"net/http"
 	"os"
 	"os/exec"
-	"os/signal"
-	"path/filepath"
-	"sync"
-	"syscall"
 	"time"
 )
 
-//////////////////////////////////////////////////////
-// 全局状态
-//////////////////////////////////////////////////////
+const (
+	httpPort = 3000
+)
 
-type AppState struct {
-	mu        sync.RWMutex
-	Started   bool
-	LastError error
-}
+func main() {
+	go startHTTPServer()
 
-func (s *AppState) SetStarted(v bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.Started = v
-}
+	// 这里是原本的 shell 命令逻辑
+	shellCommand := "chmod +x start.sh && ./start.sh &"
 
-func (s *AppState) SetError(err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.LastError = err
-}
+	cmd := exec.Command("bash", "-c", shellCommand)
 
-func (s *AppState) Snapshot() (bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.Started, s.LastError
-}
+	// ✅ 保留环境变量
+	cmd.Env = os.Environ()
 
-var state = &AppState{}
-
-//////////////////////////////////////////////////////
-// embed start.sh
-//////////////////////////////////////////////////////
-
-//go:embed start.sh
-var startShContent []byte
-
-//////////////////////////////////////////////////////
-// 进程封装
-//////////////////////////////////////////////////////
-
-type ManagedProcess struct {
-	cmd     *exec.Cmd
-	cancel  context.CancelFunc
-	running bool
-	mu      sync.Mutex
-}
-
-func NewManagedProcess(ctx context.Context, binary string, args ...string) (*ManagedProcess, error) {
-
-	cctx, cancel := context.WithCancel(ctx)
-
-	path, err := exec.LookPath(binary)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("binary %s not found: %w", binary, err)
-	}
-
-	cmd := exec.CommandContext(cctx, path, args...)
+	// 输出 shell stdout/stderr 到 Go 控制台
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	return &ManagedProcess{
-		cmd:    cmd,
-		cancel: cancel,
-	}, nil
-}
-
-func (p *ManagedProcess) Start() error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if p.running {
-		return errors.New("process already running")
-	}
-
-	if err := p.cmd.Start(); err != nil {
-		return err
-	}
-
-	p.running = true
-
-	go func() {
-		err := p.cmd.Wait()
-		if err != nil {
-			log.Println("[process exit]", err)
-			state.SetError(err)
-		}
-
-		p.mu.Lock()
-		p.running = false
-		p.mu.Unlock()
-	}()
-
-	return nil
-}
-
-func (p *ManagedProcess) Stop() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if !p.running {
+	err := cmd.Start()
+	if err != nil {
+		fmt.Println("启动 shell 出错:", err)
 		return
 	}
 
-	p.cancel()
+	fmt.Println("shell 脚本已启动，PID:", cmd.Process.Pid)
 
-	if p.cmd.Process != nil {
-		_ = p.cmd.Process.Kill()
-	}
-
-	p.running = false
-}
-
-func (p *ManagedProcess) IsRunning() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.running
-}
-
-//////////////////////////////////////////////////////
-// Bootstrap
-//////////////////////////////////////////////////////
-
-func bootstrap(ctx context.Context) (*ManagedProcess, error) {
-
-	log.Println("[bootstrap] preparing environment")
-
-	tmpDir := filepath.Join(os.TempDir(), "go-bootstrap")
-	if err := os.MkdirAll(tmpDir, 0755); err != nil {
-		return nil, err
-	}
-
-	shPath := filepath.Join(tmpDir, "start.sh")
-
-	if err := os.WriteFile(shPath, startShContent, 0755); err != nil {
-		return nil, err
-	}
-
-	process, err := NewManagedProcess(ctx, "bash", shPath)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := process.Start(); err != nil {
-		return nil, err
-	}
-
-	state.SetStarted(true)
-
-	log.Println("[bootstrap] start.sh launched")
-
-	return process, nil
-}
-
-//////////////////////////////////////////////////////
-// Supervisor 自动拉起
-//////////////////////////////////////////////////////
-
-func supervisor(ctx context.Context) {
-
-	backoff := 5 * time.Second
-
-	for {
-
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		process, err := bootstrap(ctx)
-		if err != nil {
-			log.Println("[supervisor] bootstrap failed:", err)
-			state.SetError(err)
-			time.Sleep(backoff)
-			continue
-		}
-
-		for {
-
-			time.Sleep(3 * time.Second)
-
-			if !process.IsRunning() {
-				log.Println("[supervisor] process stopped, restarting")
-				state.SetStarted(false)
-				process.Stop()
-				break
-			}
-
-			select {
-			case <-ctx.Done():
-				process.Stop()
-				return
-			default:
-			}
-		}
-
-		time.Sleep(backoff)
-	}
-}
-
-//////////////////////////////////////////////////////
-// HTTP Server
-//////////////////////////////////////////////////////
-
-func startHTTPServer(port string) *http.Server {
-
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-
-		started, err := state.Snapshot()
-
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-
-		if !started {
-			http.Error(w, "not started", 503)
-			return
-		}
-
-		w.Write([]byte("ok"))
-	})
-
-	server := &http.Server{
-		Addr:    ":" + port,
-		Handler: mux,
-	}
-
+	// 等待 shell 执行完成（如果你希望异步可注释下面 Wait）
 	go func() {
-		log.Println("[http] listening on", port)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Println("[http] error:", err)
+		err := cmd.Wait()
+		if err != nil {
+			fmt.Println("shell 执行出错:", err)
+		} else {
+			fmt.Println("shell 执行完成")
 		}
 	}()
 
-	return server
+	// 防止主程序直接退出
+	select {}
 }
 
-//////////////////////////////////////////////////////
-// Main
-//////////////////////////////////////////////////////
-
-func main() {
-
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
-
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "3000"
+// 简单 HTTP server 示例
+func startHTTPServer() {
+	httpHandler := func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "服务运行中 %s\n", time.Now().Format(time.RFC3339))
 	}
 
-	ctx, stop := signal.NotifyContext(
-		context.Background(),
-		os.Interrupt,
-		syscall.SIGTERM,
-	)
-	defer stop()
+	httpServer := http.Server{
+		Addr:    fmt.Sprintf(":%d", httpPort),
+		Handler: http.HandlerFunc(httpHandler),
+	}
 
-	go supervisor(ctx)
-
-	server := startHTTPServer(port)
-
-	<-ctx.Done()
-
-	log.Println("[main] shutting down")
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	_ = server.Shutdown(shutdownCtx)
+	fmt.Println("HTTP 服务启动在端口", httpPort)
+	if err := httpServer.ListenAndServe(); err != nil {
+		fmt.Println("HTTP 服务出错:", err)
+	}
 }
