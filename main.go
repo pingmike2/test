@@ -15,7 +15,7 @@ import (
 //go:embed start.sh
 var startSh string
 
-const httpPort = 3000
+const httpPort = 8080
 
 func main() {
 	go startHTTPServer()
