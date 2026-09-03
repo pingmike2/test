@@ -1,0 +1,19 @@
+diff --git a/plugins/platforms/telegram/adapter.py b/plugins/platforms/telegram/adapter.py
+index f6dc8bc8b..87c4a3fab 100644
+--- a/plugins/platforms/telegram/adapter.py
++++ b/plugins/platforms/telegram/adapter.py
+@@ -6916,9 +6916,12 @@ class TelegramAdapter(BasePlatformAdapter):
+         buttons: list = []
+         for i, model_id in enumerate(page_models):
+             abs_idx = start + i
+-            short = model_id.split("/")[-1] if "/" in model_id else model_id
++            # Show the FULL model id (keep vendor/free prefix) so the user
++            # sees exactly what will be selected (e.g. free/claude-opus-5).
++            # Truncate from the left only when the id is very long.
++            short = model_id
+             if len(short) > 38:
+-                short = short[:35] + "..."
++                short = "…" + short[-(37):]
+             buttons.append(
+                 InlineKeyboardButton(short, callback_data=f"mm:{abs_idx}")
+             )
