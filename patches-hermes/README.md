@@ -8,7 +8,7 @@
 给官方 Hermes 增加「**自定义端点管理页**」（官方没有此功能，仅有 /models 模型管理页）：
 
 - 侧边栏新增 **自定义端点 (Endpoints)** 页面：增删改查 OpenAI 兼容端点、激活为当前模型
-- 端点编辑表单带 **模型过滤** 输入框（如填 `free` / `deepseek-v4-flash`，保存时只保留匹配模型）
+- 端点编辑表单带 **模型过滤** 输入框（支持逗号分隔多关键词，如 `free` / `deepseek-v4-flash, deepseek-v4-pro`，命中任一即保留，保存时只保留匹配模型）
 - 保存时整体替换模型列表（`replace_models`），并自动固定 `discover_models=false`，防止自动拉全量覆盖筛选
 
 ## 包含文件
@@ -17,6 +17,7 @@
 patches-hermes/
 ├── deploy-custom-endpoints.sh        # 一键部署脚本（files/ 同目录拷贝）
 ├── endpoint-model-filter-20260903.patch   # 增量补丁（旧版升级用）
+├── endpoint-model-filter-multikeyword-20260905.patch  # 增量补丁（多关键词过滤升级用）
 ├── telegram-model-picker-full-name.patch  # 附带: TG 模型选择器显示完整模型名
 └── files/                             # 全量文件（部署脚本的源）
     ├── web/src/pages/CustomEndpointsPage.tsx

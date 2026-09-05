@@ -66,13 +66,20 @@ export function EndpointFormDialog({ endpoint, onClose, onSaved }: Props) {
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // Live-filter the fetched catalogue (e.g. type "free" to keep only free
-  // models). Empty filter = show everything.
+  // Live-filter the fetched catalogue. Multiple comma-separated keywords are
+  // supported; a model is kept when it matches ANY keyword (e.g.
+  // "deepseek-v4-flash, deepseek-v4-pro"). Empty filter = show everything.
+  const filterKeywords = useMemo(
+    () => filterText.split(",").map((item) => item.trim().toLowerCase()).filter(Boolean),
+    [filterText],
+  );
   const filteredModels = useMemo(() => {
-    const q = filterText.trim().toLowerCase();
-    if (!q) return fetchedModels;
-    return fetchedModels.filter((m) => m.toLowerCase().includes(q));
-  }, [fetchedModels, filterText]);
+    if (filterKeywords.length === 0) return fetchedModels;
+    return fetchedModels.filter((modelId) => {
+      const candidate = modelId.toLowerCase();
+      return filterKeywords.some((keyword) => candidate.includes(keyword));
+    });
+  }, [fetchedModels, filterKeywords]);
 
   // Keep the default model inside the filtered set; if the filter removes the
   // current default, fall back to the first remaining match.

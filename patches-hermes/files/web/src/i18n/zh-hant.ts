@@ -804,7 +804,7 @@ export const zhHant: Translations = {
     formApiKeyHint: "Stored in ~/.hermes/.env, never in config.yaml",
     formDiscover: "Discover models automatically",
     formMakeDefault: "Activate as default after saving",
-    formFilterHint: "筛选模型（如填 free，保存时仅保留匹配项）",
+    formFilterHint: "關鍵詞用逗號分隔（如 free, deepseek-v4），僅保留匹配項",
     formFilterEmpty: "没有匹配的模型",
   },
 };

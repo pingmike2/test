@@ -906,7 +906,7 @@ export const en: Translations = {
     formApiKeyHint: "Stored in ~/.hermes/.env, never in config.yaml",
     formDiscover: "Discover models automatically",
     formMakeDefault: "Activate as default after saving",
-    formFilterHint: "Filter models (e.g. free — saves only matches)",
+    formFilterHint: "Keywords, comma-separated (e.g. free, deepseek-v4)",
     formFilterEmpty: "No models match the filter",
   },
 };

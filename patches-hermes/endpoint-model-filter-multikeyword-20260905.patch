@@ -1,0 +1,70 @@
+diff --git a/web/src/components/EndpointFormDialog.tsx b/web/src/components/EndpointFormDialog.tsx
+index bdddd0d5ed..662fd36bd9 100644
+--- a/web/src/components/EndpointFormDialog.tsx
++++ b/web/src/components/EndpointFormDialog.tsx
+@@ -66,13 +66,20 @@ export function EndpointFormDialog({ endpoint, onClose, onSaved }: Props) {
+   const [testing, setTesting] = useState(false);
+   const [saving, setSaving] = useState(false);
+ 
+-  // Live-filter the fetched catalogue (e.g. type "free" to keep only free
+-  // models). Empty filter = show everything.
++  // Live-filter the fetched catalogue. Multiple comma-separated keywords are
++  // supported; a model is kept when it matches ANY keyword (e.g.
++  // "deepseek-v4-flash, deepseek-v4-pro"). Empty filter = show everything.
++  const filterKeywords = useMemo(
++    () => filterText.split(",").map((item) => item.trim().toLowerCase()).filter(Boolean),
++    [filterText],
++  );
+   const filteredModels = useMemo(() => {
+-    const q = filterText.trim().toLowerCase();
+-    if (!q) return fetchedModels;
+-    return fetchedModels.filter((m) => m.toLowerCase().includes(q));
+-  }, [fetchedModels, filterText]);
++    if (filterKeywords.length === 0) return fetchedModels;
++    return fetchedModels.filter((modelId) => {
++      const candidate = modelId.toLowerCase();
++      return filterKeywords.some((keyword) => candidate.includes(keyword));
++    });
++  }, [fetchedModels, filterKeywords]);
+ 
+   // Keep the default model inside the filtered set; if the filter removes the
+   // current default, fall back to the first remaining match.
+diff --git a/web/src/i18n/en.ts b/web/src/i18n/en.ts
+index 23057f6618..c136fbd3f4 100644
+--- a/web/src/i18n/en.ts
++++ b/web/src/i18n/en.ts
+@@ -906,7 +906,7 @@ export const en: Translations = {
+     formApiKeyHint: "Stored in ~/.hermes/.env, never in config.yaml",
+     formDiscover: "Discover models automatically",
+     formMakeDefault: "Activate as default after saving",
+-    formFilterHint: "Filter models (e.g. free — saves only matches)",
++    formFilterHint: "Keywords, comma-separated (e.g. free, deepseek-v4)",
+     formFilterEmpty: "No models match the filter",
+   },
+ };
+diff --git a/web/src/i18n/zh-hant.ts b/web/src/i18n/zh-hant.ts
+index 6f6e04d715..83c192a70a 100644
+--- a/web/src/i18n/zh-hant.ts
++++ b/web/src/i18n/zh-hant.ts
+@@ -804,7 +804,7 @@ export const zhHant: Translations = {
+     formApiKeyHint: "Stored in ~/.hermes/.env, never in config.yaml",
+     formDiscover: "Discover models automatically",
+     formMakeDefault: "Activate as default after saving",
+-    formFilterHint: "筛选模型（如填 free，保存时仅保留匹配项）",
++    formFilterHint: "關鍵詞用逗號分隔（如 free, deepseek-v4），僅保留匹配項",
+     formFilterEmpty: "没有匹配的模型",
+   },
+ };
+diff --git a/web/src/i18n/zh.ts b/web/src/i18n/zh.ts
+index 91f1c3de01..c16df682aa 100644
+--- a/web/src/i18n/zh.ts
++++ b/web/src/i18n/zh.ts
+@@ -800,7 +800,7 @@ export const zh: Translations = {
+     formApiKeyHint: "存储在 ~/.hermes/.env，绝不进 config.yaml",
+     formDiscover: "自动发现模型",
+     formMakeDefault: "保存后设为默认激活",
+-    formFilterHint: "筛选模型（如填 free，保存时仅保留匹配项）",
++    formFilterHint: "关键词用逗号分隔（如 free, deepseek-v4），仅保留匹配项",
+     formFilterEmpty: "没有匹配的模型",
+   },
+ };
