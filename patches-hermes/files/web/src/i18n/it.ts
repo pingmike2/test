@@ -806,5 +806,6 @@ export const it: Translations = {
     formMakeDefault: "Activate as default after saving",
     formFilterHint: "Filter models (e.g. free — saves only matches)",
     formFilterEmpty: "No models match the filter",
+    formFilterPinsDiscover: "Filtering pins the model list; discovery is off",
   },
 };

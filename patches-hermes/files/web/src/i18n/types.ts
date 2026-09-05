@@ -903,5 +903,6 @@ export interface Translations {
     formMakeDefault: string;
     formFilterHint: string;
     formFilterEmpty: string;
+    formFilterPinsDiscover: string;
   };
 }

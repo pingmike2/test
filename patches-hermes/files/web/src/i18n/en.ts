@@ -908,5 +908,6 @@ export const en: Translations = {
     formMakeDefault: "Activate as default after saving",
     formFilterHint: "Keywords, comma-separated (e.g. free, deepseek-v4)",
     formFilterEmpty: "No models match the filter",
+    formFilterPinsDiscover: "Filtering pins the model list; discovery is off",
   },
 };

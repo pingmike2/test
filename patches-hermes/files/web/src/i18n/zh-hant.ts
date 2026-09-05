@@ -806,5 +806,6 @@ export const zhHant: Translations = {
     formMakeDefault: "Activate as default after saving",
     formFilterHint: "關鍵詞用逗號分隔（如 free, deepseek-v4），僅保留匹配項",
     formFilterEmpty: "没有匹配的模型",
+    formFilterPinsDiscover: "篩選時自動關閉模型發現，防止全量覆蓋",
   },
 };

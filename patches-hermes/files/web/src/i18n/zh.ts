@@ -802,5 +802,6 @@ export const zh: Translations = {
     formMakeDefault: "保存后设为默认激活",
     formFilterHint: "关键词用逗号分隔（如 free, deepseek-v4），仅保留匹配项",
     formFilterEmpty: "没有匹配的模型",
+    formFilterPinsDiscover: "筛选时自动关闭模型发现，防止全量覆盖",
   },
 };

@@ -89,6 +89,13 @@ export function EndpointFormDialog({ endpoint, onClose, onSaved }: Props) {
     }
   }, [filteredModels, model]);
 
+  // A non-empty filter pins the catalogue — auto-discovery would re-pull the
+  // full list on the next picker refresh, undoing the filter. Force it off.
+  const filterActive = filterKeywords.length > 0;
+  useEffect(() => {
+    if (filterActive) setDiscover(false);
+  }, [filterActive]);
+
   const doTest = useCallback(async () => {
     if (!baseUrl.trim()) {
       showToast("Enter an endpoint URL first.", "error");
@@ -222,8 +229,13 @@ export function EndpointFormDialog({ endpoint, onClose, onSaved }: Props) {
           </div>
 
           <div className="flex items-center justify-between min-h-[44px]">
-            <Label className="text-xs sm:text-sm">{t.endpoints.formDiscover}</Label>
-            <Switch checked={discover} onCheckedChange={setDiscover} />
+            <div className="flex flex-col">
+              <Label className="text-xs sm:text-sm">{t.endpoints.formDiscover}</Label>
+              {filterActive && (
+                <span className="text-[11px] text-muted-foreground">{t.endpoints.formFilterPinsDiscover}</span>
+              )}
+            </div>
+            <Switch checked={discover} onCheckedChange={setDiscover} disabled={filterActive} />
           </div>
 
           <div className="flex items-center justify-between min-h-[44px]">
